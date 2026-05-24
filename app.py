@@ -2,18 +2,18 @@ import streamlit as st
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 from groq import Groq
-import time
-import uuid # Pour créer des identifiants uniques de discussion
+import uuid
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="IA Expert - Multi-Chats", layout="wide", page_icon="🧠")
+st.set_page_config(page_title="Mon IA - Style ChatGPT", layout="wide", page_icon="💬")
 
-# CSS pour un look pro
+# CSS pour un look moderne et support Arabe
 st.markdown("""
     <style>
-    .stChatMessage { border-radius: 15px; }
-    .rtl-text { direction: rtl; text-align: right; }
-    .sidebar-chat-btn { margin-bottom: 5px; }
+    .stChatMessage { border-radius: 15px; margin: 5px 0; }
+    .rtl-text { direction: rtl; text-align: right; font-family: 'Arial'; }
+    [data-testid="stSidebar"] { background-color: #f0f2f6; }
+    .sidebar-btn { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -27,61 +27,69 @@ def load_resources():
 
 model_emb, client_q, client_g = load_resources()
 
-# --- GESTION DE L'HISTORIQUE GLOBAL ---
-# 'chats' contiendra toutes nos discussions {id: [messages]}
+# --- GESTION DES SESSIONS ---
 if "all_chats" not in st.session_state:
-    st.session_state.all_chats = {}
-# 'current_chat_id' est la discussion affichée actuellement
-if "current_chat_id" not in st.session_state:
-    first_id = str(uuid.uuid4())[:8]
-    st.session_state.all_chats[first_id] = []
-    st.session_state.current_chat_id = first_id
+    st.session_state.all_chats = {} # Format: {id: {"title": "...", "messages": []}}
 
-# --- BARRE LATÉRALE (GESTION DES DISCUSSIONS) ---
+if "current_chat_id" not in st.session_state:
+    new_id = str(uuid.uuid4())[:8]
+    st.session_state.all_chats[new_id] = {"title": "Nouvelle discussion", "messages": []}
+    st.session_state.current_chat_id = new_id
+
+# --- BARRE LATÉRALE (STYLE CHATGPT) ---
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/4712/4712035.png", width=60)
-    st.title("Mes Discussions")
+    st.title("🤖 Mon IA")
     
-    if st.button("➕ Nouvelle Discussion", use_container_width=True):
+    if st.button("➕ Nouvelle discussion", use_container_width=True, type="primary"):
         new_id = str(uuid.uuid4())[:8]
-        st.session_state.all_chats[new_id] = []
+        st.session_state.all_chats[new_id] = {"title": "Nouvelle discussion", "messages": []}
         st.session_state.current_chat_id = new_id
         st.rerun()
 
-    st.markdown("---")
-    # Liste des anciennes discussions
-    for chat_id in st.session_state.all_chats.keys():
-        label = f"💬 Discussion {chat_id}"
-        # On met en gras la discussion actuelle
-        if chat_id == st.session_state.current_chat_id:
-            label = f"👉 **{label}**"
+    st.markdown("### Historique")
+    
+    # Affichage des titres des discussions
+    for chat_id, chat_data in reversed(list(st.session_state.all_chats.items())):
+        # Style du bouton (en gras si c'est l'actuel)
+        is_active = (chat_id == st.session_state.current_chat_id)
+        btn_label = f"💬 {chat_data['title']}"
         
-        if st.button(label, key=chat_id, use_container_width=True):
+        if st.button(btn_label, key=chat_id, use_container_width=True):
             st.session_state.current_chat_id = chat_id
             st.rerun()
 
-# --- INTERFACE PRINCIPALE ---
+# --- ZONE DE CHAT PRINCIPALE ---
 current_id = st.session_state.current_chat_id
-st.title(f"🧠 Assistant Intelligent ({current_id})")
+chat_data = st.session_state.all_chats[current_id]
 
-# Affichage des messages de la discussion SELECTIONNÉE
-for msg in st.session_state.all_chats[current_id]:
+st.header(chat_data["title"])
+
+# Afficher les messages
+for msg in chat_data["messages"]:
     with st.chat_message(msg["role"]):
         if any("\u0600" <= c <= "\u06FF" for c in msg["content"]):
             st.markdown(f'<div class="rtl-text">{msg["content"]}</div>', unsafe_allow_html=True)
         else:
             st.markdown(msg["content"])
 
-# --- LOGIQUE DE RÉPONSE ---
-if prompt := st.chat_input("Posez votre question..."):
-    # Ajouter à la discussion en cours
-    st.session_state.all_chats[current_id].append({"role": "user", "content": prompt})
+# --- INTERACTION ---
+if prompt := st.chat_input("Envoyez un message..."):
+    # 1. Sauvegarder le message utilisateur
+    chat_data["messages"].append({"role": "user", "content": prompt})
+    
+    # 2. Si c'est le premier message, on met à jour le titre de la discussion
+    if chat_data["title"] == "Nouvelle discussion":
+        # On prend les 30 premiers caractères pour le titre
+        new_title = prompt[:30] + "..." if len(prompt) > 30 else prompt
+        chat_data["title"] = new_title
+
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    with st.spinner("Recherche et réflexion..."):
+    # 3. Processus RAG
+    with st.spinner("L'IA réfléchit..."):
         try:
-            # 1. RAG (Recherche Qdrant)
+            # Encodage et recherche
             query_vector = model_emb.encode(prompt).tolist()
             search_results = client_q.query_points(
                 collection_name="ma_base_expert",
@@ -92,27 +100,27 @@ if prompt := st.chat_input("Posez votre question..."):
             context = "\n".join([f"- {r.payload['text']}" for r in search_results])
             sources = list(set([r.payload['source'] for r in search_results]))
 
-            # 2. Construction de la mémoire locale (historique de ce chat précis)
-            history = st.session_state.all_chats[current_id][-5:]
-            messages_for_groq = [{"role": "system", "content": f"Réponds avec ce contexte : {context}"}]
+            # Groq avec mémoire locale
+            history = chat_data["messages"][-6:] # On donne les 6 derniers messages
+            msgs = [{"role": "system", "content": f"Réponds avec ce contexte : {context}"}]
             for m in history:
-                messages_for_groq.append({"role": m["role"], "content": m["content"]})
+                msgs.append({"role": m["role"], "content": m["content"]})
 
-            # 3. Groq
             completion = client_g.chat.completions.create(
-                messages=messages_for_groq,
+                messages=msgs,
                 model="llama-3.3-70b-versatile",
                 temperature=0.3
             )
             
-            response = completion.choices[0].message.content
+            answer = completion.choices[0].message.content
             
-            # 4. Affichage et sauvegarde
+            # Affichage et sauvegarde
             with st.chat_message("assistant"):
-                st.markdown(response)
+                st.markdown(answer)
                 st.caption(f"Sources : {', '.join(sources)}")
-
-            st.session_state.all_chats[current_id].append({"role": "assistant", "content": response})
+            
+            chat_data["messages"].append({"role": "assistant", "content": answer})
+            st.rerun() # Pour rafraîchir le titre dans la sidebar immédiatement
 
         except Exception as e:
             st.error(f"Erreur : {e}")
