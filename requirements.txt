@@ -1,5 +1,5 @@
 streamlit
-qdrant-client==1.12.1
+qdrant-client
 sentence-transformers
 groq
 torch --index-url https://download.pytorch.org/whl/cpu
