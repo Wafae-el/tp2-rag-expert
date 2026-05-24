@@ -1,67 +1,103 @@
 import streamlit as st
 from qdrant_client import QdrantClient
+from sentence_transformers import SentenceTransformer
 from groq import Groq
 import uuid
 
-# --- 1. DESIGN CONFORTABLE (DARK GREY) ---
-st.set_page_config(page_title="IA Expert - Instant", layout="wide", page_icon="⚡")
+# --- 1. CONFIGURATION VISUELLE REPOSANTE ---
+st.set_page_config(page_title="IA Expert Pro", layout="wide", page_icon="🧠")
 
 st.markdown("""
     <style>
-    .stApp { background-color: #0d1117; color: #c9d1d9; }
-    [data-testid="stSidebar"] { background-color: #161b22; border-right: 1px solid #30363d; }
-    .stChatMessage { background-color: #0d1117 !important; border-bottom: 1px solid #21262d !important; }
+    .stApp { background-color: #0f172a; color: #f8fafc; }
+    [data-testid="stSidebar"] { background-color: #1e293b; border-right: 1px solid #334155; }
+    [data-testid="stSidebar"] * { color: #cbd5e1 !important; }
+    
+    /* Bulles de chat */
+    .stChatMessage { background-color: #1e293b !important; border-radius: 10px; border: 1px solid #334155; margin-bottom: 10px; }
+    
+    /* Bouton Nouvelle Discussion */
     div.stButton > button:first-child {
-        background-color: #21262d; color: #c9d1d9; border: 1px solid #30363d;
-        border-radius: 20px; width: 100%; transition: 0.2s;
+        background-color: #38bdf8; color: #0f172a; border: none;
+        border-radius: 8px; width: 100%; font-weight: bold;
     }
+    
+    /* Boutons de suppression (poubelle) */
+    .del-btn { color: #f87171 !important; font-size: 12px; cursor: pointer; }
+    
     .rtl-text { direction: rtl; text-align: right; font-size: 1.1rem; }
-    .source-badge {
-        font-size: 10px; color: #58a6ff; background-color: rgba(56, 139, 253, 0.1);
-        padding: 2px 8px; border-radius: 10px; border: 1px solid rgba(56, 139, 253, 0.4);
-    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. INITIALISATION INSTANTANÉE (FastEmbed) ---
+# --- 2. INITIALISATION (SANS FASTEXT POUR ÉVITER LE CRASH) ---
 @st.cache_resource
-def init_all():
-    # On utilise FastEmbed directement intégré à Qdrant
-    # Le modèle BGE-M3 est téléchargé UNE SEULE FOIS au démarrage de l'app
-    client_q = QdrantClient(url=st.secrets["Q_URL"], api_key=st.secrets["Q_API"])
-    client_q.set_model("BAAI/bge-m3") # Version optimisée et légère
-    
-    client_g = Groq(api_key=st.secrets["G_API"])
-    return client_q, client_g
+def load_resources():
+    # Modèle multilingue léger (tient dans 1Go de RAM et répond immédiatement)
+    model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+    q_client = QdrantClient(url=st.secrets["Q_URL"], api_key=st.secrets["Q_API"])
+    g_client = Groq(api_key=st.secrets["G_API"])
+    return model, q_client, g_client
 
-client_q, client_g = init_all()
+try:
+    model_emb, client_q, client_g = load_resources()
+except Exception as e:
+    st.error(f"Erreur de chargement : {e}")
 
 # --- 3. GESTION DES SESSIONS ---
-if "all_chats" not in st.session_state: st.session_state.all_chats = {}
+if "all_chats" not in st.session_state:
+    st.session_state.all_chats = {}
 if "current_chat_id" not in st.session_state:
     nid = str(uuid.uuid4())[:8]
     st.session_state.all_chats[nid] = {"title": "Nouvelle discussion", "messages": []}
     st.session_state.current_chat_id = nid
 
-# --- 4. SIDEBAR ---
+# --- 4. SIDEBAR : HISTORIQUE ET SUPPRESSION ---
 with st.sidebar:
-    st.markdown("<h2 style='font-size: 18px;'>⚡ Assistant Instantané</h2>", unsafe_allow_html=True)
-    if st.button("＋ Nouvelle discussion"):
+    st.markdown("### 🧠 Mes Discussions")
+    if st.button("➕ NOUVELLE DISCUSSION"):
         nid = str(uuid.uuid4())[:8]
         st.session_state.all_chats[nid] = {"title": "Nouvelle discussion", "messages": []}
         st.session_state.current_chat_id = nid
         st.rerun()
     
-    st.markdown("<p style='margin-top: 20px; font-size: 11px; color: #8b949e;'>HISTORIQUE</p>", unsafe_allow_html=True)
+    st.markdown("---")
+    
+    # Liste des discussions avec bouton de suppression
+    ids_to_delete = []
     for cid, data in reversed(list(st.session_state.all_chats.items())):
-        active = "color: #58a6ff;" if cid == st.session_state.current_chat_id else ""
-        if st.button(f"• {data['title'][:20]}", key=f"chat_{cid}"):
-            st.session_state.current_chat_id = cid
-            st.rerun()
+        col1, col2 = st.columns([0.8, 0.2])
+        
+        # Bouton pour sélectionner la discussion
+        with col1:
+            is_active = (cid == st.session_state.current_chat_id)
+            label = f"{'🔹 ' if is_active else ''}{data['title'][:20]}"
+            if st.button(label, key=f"select_{cid}", use_container_width=True):
+                st.session_state.current_chat_id = cid
+                st.rerun()
+        
+        # Bouton pour supprimer (Poubelle)
+        with col2:
+            if st.button("🗑️", key=f"del_{cid}"):
+                ids_to_delete.append(cid)
+
+    # Exécution de la suppression
+    for i in ids_to_delete:
+        del st.session_state.all_chats[i]
+        # Si on supprime la discussion actuelle, on bascule sur une autre
+        if i == st.session_state.current_chat_id:
+            if st.session_state.all_chats:
+                st.session_state.current_chat_id = list(st.session_state.all_chats.keys())[0]
+            else:
+                nid = str(uuid.uuid4())[:8]
+                st.session_state.all_chats[nid] = {"title": "Nouvelle discussion", "messages": []}
+                st.session_state.current_chat_id = nid
+        st.rerun()
 
 # --- 5. ZONE DE CHAT ---
 cur_id = st.session_state.current_chat_id
 chat_data = st.session_state.all_chats[cur_id]
+
+st.title(chat_data["title"])
 
 for msg in chat_data["messages"]:
     with st.chat_message(msg["role"]):
@@ -71,36 +107,34 @@ for msg in chat_data["messages"]:
 
 if prompt := st.chat_input("Posez votre question..."):
     chat_data["messages"].append({"role": "user", "content": prompt})
-    if chat_data["title"] == "Nouvelle discussion": chat_data["title"] = prompt[:25]
+    if chat_data["title"] == "Nouvelle discussion":
+        chat_data["title"] = (prompt[:25] + '...') if len(prompt) > 25 else prompt
+    
     with st.chat_message("user"): st.markdown(prompt)
 
     with st.spinner("Réponse immédiate..."):
         try:
-            # ÉTAPE CLÉ : client_q.query(...) fait l'embedding ET la recherche en une seule fois !
-            # C'est local, c'est compressé, ça ne crash pas la RAM.
-            search = client_q.query(
-                collection_name="ma_base_expert",
-                query_text=prompt,
-                limit=3
-            )
+            # 1. Embedding local (Immédiat, pas besoin de HF API)
+            vector = model_emb.encode(prompt).tolist()
 
-            context = "\n".join([f"- {r.metadata['text']}" for r in search])
-            sources = list(set([r.metadata['source'] for r in search]))
+            # 2. Recherche Qdrant
+            search = client_q.query_points(collection_name="ma_base_expert", query=vector, limit=3).points
+            context = "\n".join([f"- {r.payload['text']}" for r in search])
+            sources = list(set([r.payload['source'] for r in search]))
 
-            # Groq (Llama 3.3 70B) pour la rapidité de génération
+            # 3. Groq (Llama 3.3)
+            history = chat_data["messages"][-5:]
             msgs = [{"role": "system", "content": f"Tu es un expert. Réponds avec ce contexte : {context}"}]
-            for m in chat_data["messages"][-5:]: msgs.append({"role": m["role"], "content": m["content"]})
+            for m in history: msgs.append({"role": m["role"], "content": m["content"]})
 
             res = client_g.chat.completions.create(messages=msgs, model="llama-3.3-70b-versatile")
             ans = res.choices[0].message.content
             
             with st.chat_message("assistant"):
                 st.markdown(ans)
-                src_html = "".join([f'<span class="source-badge">{s}</span>' for s in sources])
-                st.markdown(src_html, unsafe_allow_html=True)
+                st.caption(f"Sources : {', '.join(sources)}")
             
             chat_data["messages"].append({"role": "assistant", "content": ans})
             st.rerun()
-            
         except Exception as e:
-            st.error(f"Détail : {e}")
+            st.error(f"Erreur technique : {e}")
