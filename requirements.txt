@@ -1,3 +1,4 @@
 streamlit
-qdrant-client[fastembed]
+qdrant-client
+sentence-transformers
 groq
