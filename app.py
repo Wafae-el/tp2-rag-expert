@@ -3,30 +3,30 @@ from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 from groq import Groq
 
-# Config de la page
+# Configuration
 st.set_page_config(page_title="IA Expert RAG", layout="centered")
 
-# --- INITIALISATION ---
+# --- CHARGEMENT DU MODÈLE (On garde le cache ici car c'est lourd) ---
 @st.cache_resource
-def load_all():
-    # Chargement des clés depuis les secrets
-    q_url = st.secrets["Q_URL"]
-    q_api = st.secrets["Q_API"]
-    g_api = st.secrets["G_API"]
-    
-    # Création des clients
-    q_client = QdrantClient(url=q_url, api_key=q_api)
-    model = SentenceTransformer('BAAI/bge-m3')
-    groq_client = Groq(api_key=g_api)
-    
-    return q_client, model, groq_client
+def load_embed_model():
+    return SentenceTransformer('BAAI/bge-m3')
 
-# On récupère les services
-client_q, model_emb, client_g = load_all()
+model_emb = load_embed_model()
+
+# --- INITIALISATION DES CLIENTS (Sans cache pour éviter ton erreur) ---
+def get_clients():
+    q_client = QdrantClient(
+        url=st.secrets["Q_URL"], 
+        api_key=st.secrets["Q_API"]
+    )
+    g_client = Groq(api_key=st.secrets["G_API"])
+    return q_client, g_client
+
+client_q, client_g = get_clients()
 
 st.title("🤖 Mon Assistant IA Expert")
 
-# Historique de chat
+# Historique
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -40,27 +40,28 @@ if prompt := st.chat_input("Posez votre question..."):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    with st.spinner("Recherche et génération..."):
+    with st.spinner("Recherche dans la base vectorielle..."):
         try:
-            # 1. Vectoriser
-            vector = model_emb.encode(prompt).tolist()
+            # 1. Encodage de la question
+            query_vector = model_emb.encode(prompt).tolist()
 
-            # 2. Chercher dans Qdrant
-            # On vérifie bien le nom de la collection utilisée dans Colab
+            # 2. Recherche dans Qdrant (Correction de l'erreur search)
+            # On utilise le client fraichement créé
             search_results = client_q.search(
                 collection_name="ma_base_expert",
-                query_vector=vector,
+                query_vector=query_vector,
                 limit=3
             )
 
+            # 3. Préparation du contexte
             context = ""
             sources = []
             for res in search_results:
                 context += f"\n- {res.payload['text']}"
                 sources.append(res.payload['source'])
 
-            # 3. Réponse Groq
-            full_prompt = f"Réponds à la question en utilisant ce contexte :\n{context}\n\nQuestion : {prompt}"
+            # 4. Génération avec Groq Llama 3.3
+            full_prompt = f"Utilise ce contexte pour répondre : {context}\n\nQuestion : {prompt}"
             
             completion = client_g.chat.completions.create(
                 messages=[{"role": "user", "content": full_prompt}],
@@ -75,4 +76,4 @@ if prompt := st.chat_input("Posez votre question..."):
             st.session_state.messages.append({"role": "assistant", "content": final_ans})
             
         except Exception as e:
-            st.error(f"Oups ! Une erreur est survenue : {e}")
+            st.error(f"Détail de l'erreur : {e}")
