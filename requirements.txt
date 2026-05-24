@@ -1,5 +1,4 @@
 streamlit
 qdrant-client
-sentence-transformers
 groq
-torch --index-url https://download.pytorch.org/whl/cpu
+requests
