@@ -72,4 +72,7 @@ if prompt := st.chat_input("Posez votre question..."):
 
             with st.chat_message("assistant"):
                 st.markdown(final_ans)
-            st.sess
+            st.session_state.messages.append({"role": "assistant", "content": final_ans})
+            
+        except Exception as e:
+            st.error(f"Oups ! Une erreur est survenue : {e}")
