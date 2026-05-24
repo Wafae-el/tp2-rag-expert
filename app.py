@@ -2,93 +2,117 @@ import streamlit as st
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 from groq import Groq
+import time
 
-# 1. Configuration de la page (DOIT être la première commande Streamlit)
-st.set_page_config(page_title="IA Expert RAG", layout="centered", page_icon="🤖")
+# --- CONFIGURATION PRO ---
+st.set_page_config(page_title="IA Expert RAG + Mémoire", layout="wide", page_icon="🧠")
 
-# 2. Barre latérale (Sidebar) - Ton ajout extraordinaire
-st.sidebar.image("https://cdn-icons-png.flaticon.com/512/4712/4712035.png", width=100)
-st.sidebar.title("Configuration")
-st.sidebar.info("""
-**Tech Stack :**
-- **LLM :** Llama 3.3 70B (Groq)
-- **Embeddings :** BGE-M3 (Multilingue)
-- **Vecteur DB :** Qdrant Cloud
-""")
+# CSS pour un look "ChatGPT" et support Arabe
+st.markdown("""
+    <style>
+    .stChatMessage { border-radius: 20px; margin: 10px 0; }
+    .rtl-text { direction: rtl; text-align: right; font-family: 'Arial'; }
+    .source-tag { background: #f0f2f6; padding: 2px 8px; border-radius: 10px; font-size: 0.8em; color: #555; margin-right: 5px; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# Petit bouton bonus pour effacer le chat
-if st.sidebar.button("🗑️ Effacer la discussion"):
-    st.session_state.messages = []
-    st.rerun()
-
-# 3. Chargement des modèles et clients
+# --- CHARGEMENT DES RESSOURCES ---
 @st.cache_resource
-def get_model():
-    return SentenceTransformer('BAAI/bge-m3')
+def load_all():
+    model = SentenceTransformer('BAAI/bge-m3')
+    q_client = QdrantClient(url=st.secrets["Q_URL"], api_key=st.secrets["Q_API"])
+    g_client = Groq(api_key=st.secrets["G_API"])
+    return model, q_client, g_client
 
-model_emb = get_model()
+model_emb, client_q, client_g = load_all()
 
-# Connexion sécurisée via secrets
-client_q = QdrantClient(url=st.secrets["Q_URL"], api_key=st.secrets["Q_API"])
-client_g = Groq(api_key=st.secrets["G_API"])
-
-# 4. Interface principale
-st.title("🤖 Mon Assistant IA Expert")
-st.write("Posez une question en **Français, Anglais ou Arabe**.")
-
-# Historique de la session
+# --- GESTION DE LA MÉMOIRE (DISCUSSION) ---
+# On initialise l'historique s'il n'existe pas
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# BARRE LATÉRALE
+with st.sidebar:
+    st.image("https://cdn-icons-png.flaticon.com/512/4712/4712035.png", width=70)
+    st.title("IA Expert")
+    st.info(f"Modèle : Llama 3.3 70B\nDocuments indexés : Qdrant Cloud")
+    
+    if st.button("🗑️ Effacer la discussion"):
+        st.session_state.messages = []
+        st.rerun()
+
+# --- INTERFACE PRINCIPALE ---
+st.title("🧠 Assistant Intelligent avec Mémoire")
+
+# Affichage des anciens messages
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+        if any("\u0600" <= c <= "\u06FF" for c in msg["content"]):
+            st.markdown(f'<div class="rtl-text">{msg["content"]}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(msg["content"])
 
-# 5. Logique de Question/Réponse
-if prompt := st.chat_input("Votre question ici..."):
+# --- LOGIQUE DE RÉPONSE ---
+if prompt := st.chat_input("Posez votre question..."):
+    # 1. On affiche et on sauvegarde la question
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    with st.spinner("Recherche dans la base de connaissances..."):
+    with st.spinner("Réflexion en cours..."):
         try:
-            # Encodage de la question
+            # 2. RECHERCHE VECTORIELLE (RAG)
             query_vector = model_emb.encode(prompt).tolist()
-
-            # Recherche vectorielle
             search_results = client_q.query_points(
                 collection_name="ma_base_expert",
                 query=query_vector,
                 limit=3
             ).points
 
-            # Construction du contexte
-            context_text = ""
-            sources = []
-            for res in search_results:
-                context_text += f"\n- {res.payload['text']}"
-                sources.append(res.payload['source'])
+            # Préparation du contexte
+            context = "\n".join([f"- {r.payload['text']} (Source: {r.payload['source']})" for r in search_results])
+            sources = list(set([r.payload['source'] for r in search_results]))
 
-            # Génération de la réponse
-            sys_prompt = f"""Tu es un assistant expert. Réponds de façon précise en utilisant ce contexte :
-            {context_text}
-            Si l'info n'est pas là, dis que tu ne sais pas.
-            """
+            # 3. MÉMOIRE DE LA CONVERSATION
+            # On prend les 5 derniers messages pour donner du contexte à l'IA
+            history = st.session_state.messages[-5:] 
             
-            chat_completion = client_g.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": prompt}
-                ],
+            # Construction du prompt "Intelligent"
+            messages_for_groq = [
+                {
+                    "role": "system", 
+                    "content": f"""Tu es un assistant IA ultra-intelligent. 
+                    Utilise le CONTEXTE suivant pour répondre. 
+                    Prends aussi en compte l'HISTORIQUE de notre discussion pour comprendre les questions de suivi.
+                    Si l'info n'est pas dans le contexte, dis-le.
+                    
+                    CONTEXTE : {context}"""
+                }
+            ]
+            # On ajoute l'historique
+            for m in history:
+                messages_for_groq.append({"role": m["role"], "content": m["content"]})
+
+            # 4. GÉNÉRATION VIA GROQ
+            start_time = time.time()
+            completion = client_g.chat.completions.create(
+                messages=messages_for_groq,
                 model="llama-3.3-70b-versatile",
+                temperature=0.3, # Un peu de créativité mais reste précis
             )
             
-            reponse = chat_completion.choices[0].message.content
-            final_ans = f"{reponse}\n\n**Sources consultées :** {', '.join(list(set(sources)))}"
+            response = completion.choices[0].message.content
+            duration = round(time.time() - start_time, 2)
 
+            # 5. AFFICHAGE ET SAUVEGARDE
             with st.chat_message("assistant"):
-                st.markdown(final_ans)
-            st.session_state.messages.append({"role": "assistant", "content": final_ans})
+                st.markdown(response)
+                # Affichage propre des sources
+                source_html = "".join([f'<span class="source-tag">📄 {s}</span>' for s in sources])
+                st.markdown(source_html, unsafe_allow_html=True)
+                st.caption(f"Calculé en {duration}s")
+
+            st.session_state.messages.append({"role": "assistant", "content": response})
 
         except Exception as e:
             st.error(f"Erreur : {e}")
