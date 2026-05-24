@@ -1,3 +1,6 @@
+st.sidebar.image("https://cdn-icons-png.flaticon.com/512/4712/4712035.png", width=100)
+st.sidebar.title("Paramètres")
+st.sidebar.info("Modèle : Llama 3.3 70B\nEmbeddings : BGE-M3\nBase : Qdrant Cloud")
 import streamlit as st
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
