@@ -3,28 +3,27 @@ from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 from groq import Groq
 
-# Configuration
+# Configuration de la page
 st.set_page_config(page_title="IA Expert RAG", layout="centered")
 
-# --- CHARGEMENT DU MODÈLE (On garde le cache ici car c'est lourd) ---
+# --- CHARGEMENT DU MODÈLE D'EMBEDDING ---
 @st.cache_resource
-def load_embed_model():
+def get_model():
     return SentenceTransformer('BAAI/bge-m3')
 
-model_emb = load_embed_model()
+model_emb = get_model()
 
-# --- INITIALISATION DES CLIENTS (Sans cache pour éviter ton erreur) ---
-def get_clients():
-    q_client = QdrantClient(
-        url=st.secrets["Q_URL"], 
-        api_key=st.secrets["Q_API"]
-    )
-    g_client = Groq(api_key=st.secrets["G_API"])
-    return q_client, g_client
+# --- CONNEXION AUX SERVICES ---
+# On crée les clients directement pour éviter les erreurs d'attributs
+q_url = st.secrets["Q_URL"]
+q_api = st.secrets["Q_API"]
+g_api = st.secrets["G_API"]
 
-client_q, client_g = get_clients()
+client_q = QdrantClient(url=q_url, api_key=q_api)
+client_g = Groq(api_key=g_api)
 
 st.title("🤖 Mon Assistant IA Expert")
+st.write("Posez une question sur les documents indexés.")
 
 # Historique
 if "messages" not in st.session_state:
@@ -35,45 +34,49 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
 
 # Entrée utilisateur
-if prompt := st.chat_input("Posez votre question..."):
+if prompt := st.chat_input("Votre question..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    with st.spinner("Recherche dans la base vectorielle..."):
+    with st.spinner("Recherche..."):
         try:
-            # 1. Encodage de la question
+            # 1. Créer le vecteur
             query_vector = model_emb.encode(prompt).tolist()
 
-            # 2. Recherche dans Qdrant (Correction de l'erreur search)
-            # On utilise le client fraichement créé
-            search_results = client_q.search(
+            # 2. Recherche (On essaie 'query_points' qui est la méthode moderne)
+            # Si 'search' ne marche pas, 'query_points' est plus robuste
+            search_results = client_q.query_points(
                 collection_name="ma_base_expert",
-                query_vector=query_vector,
+                query=query_vector,
                 limit=3
-            )
+            ).points
 
-            # 3. Préparation du contexte
-            context = ""
+            # 3. Préparer le contexte
+            context_text = ""
             sources = []
             for res in search_results:
-                context += f"\n- {res.payload['text']}"
+                context_text += f"\n- {res.payload['text']}"
                 sources.append(res.payload['source'])
 
-            # 4. Génération avec Groq Llama 3.3
-            full_prompt = f"Utilise ce contexte pour répondre : {context}\n\nQuestion : {prompt}"
+            # 4. Générer la réponse avec Groq
+            sys_prompt = f"Tu es un assistant expert. Réponds en utilisant ce contexte : {context_text}"
             
-            completion = client_g.chat.completions.create(
-                messages=[{"role": "user", "content": full_prompt}],
+            chat_completion = client_g.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": prompt}
+                ],
                 model="llama-3.3-70b-versatile",
             )
             
-            ans = completion.choices[0].message.content
-            final_ans = f"{ans}\n\n**Sources :** {', '.join(list(set(sources)))}"
+            reponse = chat_completion.choices[0].message.content
+            full_response = f"{reponse}\n\n**Sources :** {', '.join(list(set(sources)))}"
 
             with st.chat_message("assistant"):
-                st.markdown(final_ans)
-            st.session_state.messages.append({"role": "assistant", "content": final_ans})
-            
+                st.markdown(full_response)
+            st.session_state.messages.append({"role": "assistant", "content": full_response})
+
         except Exception as e:
-            st.error(f"Détail de l'erreur : {e}")
+            st.error(f"Erreur technique : {e}")
+            st.info("Conseil : Vérifiez que la collection 'ma_base_expert' existe bien dans votre Qdrant Cloud.")
