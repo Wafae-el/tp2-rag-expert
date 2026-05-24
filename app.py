@@ -4,70 +4,94 @@ from groq import Groq
 import requests
 import uuid
 
-# --- 1. CONFIGURATION INTERFACE LUXE ---
-st.set_page_config(page_title="AI Expert", layout="wide", page_icon="⚫")
+# --- 1. CONFIGURATION INTERFACE "CONFORT VISUEL" ---
+st.set_page_config(page_title="IA Expert - Soft Dark", layout="wide", page_icon="🧠")
 
-# CSS pour transformer l'app en interface type "ChatGPT / Apple"
 st.markdown("""
     <style>
-    /* Global */
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
-    html, body, [class*="css"] { font-family: 'Inter', sans-serif; background-color: #ffffff; }
+    /* Fond général Ardoise Profonde (très reposant) */
+    .stApp {
+        background-color: #0e1117;
+        color: #c9d1d9;
+    }
 
-    /* Sidebar - Style Dark Mode pur */
+    /* Sidebar Grise subtile */
     [data-testid="stSidebar"] {
-        background-color: #000000;
-        border-right: 1px solid #333;
+        background-color: #161b22;
+        border-right: 1px solid #30363d;
     }
-    [data-testid="stSidebar"] * { color: #ffffff !important; }
+    
+    /* Titres sidebar */
+    [data-testid="stSidebar"] h2, [data-testid="stSidebar"] p {
+        color: #8b949e !important;
+    }
 
-    /* Bouton Nouvelle Discussion - Minimaliste blanc */
+    /* Bouton Nouvelle Discussion - Style "Pill" Moderne */
     div.stButton > button:first-child {
-        background-color: #ffffff;
-        color: #000000;
-        border: none;
-        border-radius: 5px;
+        background-color: #21262d;
+        color: #c9d1d9;
+        border: 1px solid #30363d;
+        border-radius: 20px;
         width: 100%;
-        font-weight: 600;
-        height: 45px;
-        transition: 0.3s;
-    }
-    div.stButton > button:first-child:hover { background-color: #cccccc; }
-
-    /* Historique - Liens discrets */
-    div[data-testid="stSidebar"] button[key*="chat"] {
-        background-color: transparent;
-        border: none;
-        text-align: left;
-        color: #888888 !important;
+        height: 40px;
         font-size: 14px;
         transition: 0.2s;
     }
-    div[data-testid="stSidebar"] button[key*="chat"]:hover { color: #ffffff !important; }
+    div.stButton > button:first-child:hover {
+        background-color: #30363d;
+        border-color: #8b949e;
+    }
 
-    /* Zone de Chat */
+    /* Boutons Historique - Texte discret */
+    div[data-testid="stSidebar"] button[key*="chat"] {
+        background-color: transparent;
+        border: none;
+        color: #8b949e !important;
+        text-align: left;
+        font-size: 14px;
+        padding: 5px 10px;
+    }
+    div[data-testid="stSidebar"] button[key*="chat"]:hover {
+        color: #58a6ff !important;
+        background-color: #1f242c;
+    }
+
+    /* Bulles de Chat - Style Épuré */
     .stChatMessage {
-        background-color: transparent !important;
-        border-bottom: 1px solid #f0f0f0;
-        border-radius: 0px;
+        background-color: #0e1117 !important;
+        border: none !important;
+        padding-top: 20px;
+        padding-bottom: 20px;
     }
     
-    /* Support Arabe */
-    .rtl-text { direction: rtl; text-align: right; font-size: 1.1rem; line-height: 1.6; }
+    /* Séparateur de message */
+    .stChatMessage + .stChatMessage {
+        border-top: 1px solid #21262d !important;
+    }
 
-    /* Badge sources */
+    /* Support Arabe */
+    .rtl-text { 
+        direction: rtl; 
+        text-align: right; 
+        color: #c9d1d9;
+        font-size: 1.1rem;
+        line-height: 1.8;
+    }
+
+    /* Sources style Tags */
     .source-badge {
-        font-size: 10px;
-        color: #999;
-        border: 1px solid #ddd;
-        padding: 2px 8px;
-        border-radius: 10px;
-        margin-right: 5px;
+        font-size: 11px;
+        color: #58a6ff;
+        background-color: rgba(56, 139, 253, 0.1);
+        padding: 3px 10px;
+        border-radius: 12px;
+        margin-right: 8px;
+        border: 1px solid rgba(56, 139, 253, 0.4);
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. LOGIQUE TECHNIQUE (Inchangée mais optimisée) ---
+# --- 2. LOGIQUE TECHNIQUE API ---
 def get_embeddings_api(text):
     api_url = "https://api-inference.huggingface.co/models/BAAI/bge-m3"
     headers = {"Authorization": f"Bearer {st.secrets['HF_TOKEN']}"}
@@ -91,16 +115,17 @@ if "current_chat_id" not in st.session_state:
 
 # --- 4. SIDEBAR ---
 with st.sidebar:
-    st.markdown("<h2 style='font-weight:600;'>AI Expert</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='font-size: 20px; margin-bottom: 20px;'>Assistant Expert</h2>", unsafe_allow_html=True)
     if st.button("＋ Nouvelle discussion"):
         nid = str(uuid.uuid4())[:8]
         st.session_state.all_chats[nid] = {"title": "Nouvelle discussion", "messages": []}
         st.session_state.current_chat_id = nid
         st.rerun()
     
-    st.markdown("<br><p style='color:#555; font-size:12px; font-weight:600;'>HISTORIQUE</p>", unsafe_allow_html=True)
+    st.markdown("<p style='margin-top: 30px; margin-bottom: 10px; font-size: 12px;'>HISTORIQUE</p>", unsafe_allow_html=True)
     for cid, data in reversed(list(st.session_state.all_chats.items())):
-        if st.button(f"• {data['title'][:20]}", key=f"chat_{cid}"):
+        active_color = "#58a6ff" if cid == st.session_state.current_chat_id else "#8b949e"
+        if st.button(f"• {data['title'][:22]}", key=f"chat_{cid}"):
             st.session_state.current_chat_id = cid
             st.rerun()
 
@@ -108,23 +133,23 @@ with st.sidebar:
 cur_id = st.session_state.current_chat_id
 chat_data = st.session_state.all_chats[cur_id]
 
-# En-tête de la discussion
-st.markdown(f"<h3 style='font-weight:600; color:#111;'>{chat_data['title']}</h3>", unsafe_allow_html=True)
-st.markdown("---")
+# En-tête discret
+st.markdown(f"<h4 style='color:#c9d1d9; font-weight:400;'>{chat_data['title']}</h4>", unsafe_allow_html=True)
 
 for msg in chat_data["messages"]:
     with st.chat_message(msg["role"]):
         if any("\u0600" <= c <= "\u06FF" for c in msg["content"]):
             st.markdown(f'<div class="rtl-text">{msg["content"]}</div>', unsafe_allow_html=True)
-        else: st.markdown(msg["content"])
+        else: 
+            st.markdown(msg["content"])
 
-if prompt := st.chat_input("Écrivez un message..."):
+if prompt := st.chat_input("Posez votre question..."):
     chat_data["messages"].append({"role": "user", "content": prompt})
     if chat_data["title"] == "Nouvelle discussion": chat_data["title"] = prompt[:30]
     
     with st.chat_message("user"): st.markdown(prompt)
 
-    with st.spinner(""): # Spinner invisible pour plus de classe
+    with st.spinner("Analyse..."):
         vector = get_embeddings_api(prompt)
         if vector:
             try:
@@ -132,7 +157,7 @@ if prompt := st.chat_input("Écrivez un message..."):
                 context = "\n".join([f"- {r.payload['text']}" for r in search])
                 sources = list(set([r.payload['source'] for r in search]))
 
-                msgs = [{"role": "system", "content": f"Réponds avec ce contexte : {context}"}]
+                msgs = [{"role": "system", "content": f"Tu es un expert. Réponds avec ce contexte : {context}"}]
                 for m in chat_data["messages"][-5:]: msgs.append({"role": m["role"], "content": m["content"]})
 
                 res = client_g.chat.completions.create(messages=msgs, model="llama-3.3-70b-versatile")
@@ -145,5 +170,5 @@ if prompt := st.chat_input("Écrivez un message..."):
                 
                 chat_data["messages"].append({"role": "assistant", "content": ans})
                 st.rerun()
-            except Exception as e: st.error("L'IA est occupée.")
-        else: st.error("Connexion perdue. Réessayez.")
+            except Exception as e: st.error("Délai d'attente dépassé. Réessayez.")
+        else: st.error("Service d'analyse en veille. Réessayez dans 10 secondes.")
