@@ -3,81 +3,73 @@ from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 from groq import Groq
 
-# Configuration de la page
-st.set_page_config(page_title="RAG Multilingue Expert", page_icon="🤖", layout="centered")
-
-st.title("🤖 Mon Assistant IA Expert")
-st.markdown("Ce système utilise **Llama 3.3 70B** et une base vectorielle **Qdrant**.")
+# Config de la page
+st.set_page_config(page_title="IA Expert RAG", layout="centered")
 
 # --- INITIALISATION ---
 @st.cache_resource
-def init_services():
-    # Connexion à Qdrant
-    q_client = QdrantClient(url=st.secrets["Q_URL"], api_key=st.secrets["Q_API"])
-    # Modèle d'embeddings
-    embed_model = SentenceTransformer('BAAI/bge-m3')
-    # Client Groq
-    g_client = Groq(api_key=st.secrets["G_API"])
-    return q_client, embed_model, g_client
+def load_all():
+    # Chargement des clés depuis les secrets
+    q_url = st.secrets["Q_URL"]
+    q_api = st.secrets["Q_API"]
+    g_api = st.secrets["G_API"]
+    
+    # Création des clients
+    q_client = QdrantClient(url=q_url, api_key=q_api)
+    model = SentenceTransformer('BAAI/bge-m3')
+    groq_client = Groq(api_key=g_api)
+    
+    return q_client, model, groq_client
 
-# On essaie de charger les services, sinon on affiche une erreur propre
-try:
-    client_q, model_emb, client_g = init_services()
-except Exception as e:
-    st.error(f"Erreur de configuration : {e}")
-    st.stop()
+# On récupère les services
+client_q, model_emb, client_g = load_all()
 
-# --- CHAT INTERFACE ---
+st.title("🤖 Mon Assistant IA Expert")
+
+# Historique de chat
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Affichage de l'historique
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
 # Entrée utilisateur
-if prompt := st.chat_input("Posez votre question ici..."):
+if prompt := st.chat_input("Posez votre question..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    with st.spinner("L'IA réfléchit..."):
-        # 1. On transforme la question en vecteur
-        query_vector = model_emb.encode(prompt).tolist()
+    with st.spinner("Recherche et génération..."):
+        try:
+            # 1. Vectoriser
+            vector = model_emb.encode(prompt).tolist()
 
-        # 2. On cherche dans Qdrant
-        search_results = client_q.search(
-            collection_name="ma_base_expert",
-            query_vector=query_vector,
-            limit=3
-        )
+            # 2. Chercher dans Qdrant
+            # On vérifie bien le nom de la collection utilisée dans Colab
+            search_results = client_q.search(
+                collection_name="ma_base_expert",
+                query_vector=vector,
+                limit=3
+            )
 
-        # 3. On prépare le contexte pour le LLM
-        context = ""
-        sources = []
-        for res in search_results:
-            context += f"\n- {res.payload['text']}"
-            sources.append(res.payload['source'])
+            context = ""
+            sources = []
+            for res in search_results:
+                context += f"\n- {res.payload['text']}"
+                sources.append(res.payload['source'])
 
-        # 4. Génération de la réponse avec Groq
-        full_prompt = f"""Tu es un assistant intelligent. Utilise le contexte suivant pour répondre précisément à la question.
-        Si l'information n'est pas dans le contexte, dis poliment que tu ne sais pas.
-        
-        CONTEXTE: {context}
-        QUESTION: {prompt}
-        """
+            # 3. Réponse Groq
+            full_prompt = f"Réponds à la question en utilisant ce contexte :\n{context}\n\nQuestion : {prompt}"
+            
+            completion = client_g.chat.completions.create(
+                messages=[{"role": "user", "content": full_prompt}],
+                model="llama-3.3-70b-versatile",
+            )
+            
+            ans = completion.choices[0].message.content
+            final_ans = f"{ans}\n\n**Sources :** {', '.join(list(set(sources)))}"
 
-        chat_completion = client_g.chat.completions.create(
-            messages=[{"role": "user", "content": full_prompt}],
-            model="llama-3.3-70b-versatile",
-        )
-        
-        response_text = chat_completion.choices[0].message.content
-        source_display = f"\n\n**Sources utilisées :** {', '.join(list(set(sources)))}"
-        final_answer = response_text + source_display
-
-    with st.chat_message("assistant"):
-        st.markdown(final_answer)
-
-    st.session_state.messages.append({"role": "assistant", "content": final_answer})
+            with st.chat_message("assistant"):
+                st.markdown(final_ans)
+            st.sess
